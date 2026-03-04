@@ -156,58 +156,76 @@ func main() {
     }
 
 	case "get-progress":
-    _, id := os.Args[2], os.Args[3]
-    resp, err := traktRequest("GET", "sync/playback", &config, nil)
-    if err == nil {
-        var results []map[string]interface{}
-        json.NewDecoder(resp.Body).Decode(&results)
-        for _, item := range results {
-            // Check if this bookmark matches our current ID
-            var itemID string
-            if item["type"] == "episode" {
-                // Construct the tt123:s:e format
-                show := item["show"].(map[string]interface{})["ids"].(map[string]interface{})["imdb"].(string)
-                ep := item["episode"].(map[string]interface{})
-                itemID = fmt.Sprintf("%s:%v:%v", show, ep["season"], ep["number"])
-            } else {
-                itemID = item["movie"].(map[string]interface{})["ids"].(map[string]interface{})["imdb"].(string)
-            }
+        if len(os.Args) < 4 { return }
+        _, id := os.Args[2], os.Args[3]
+        resp, err := traktRequest("GET", "sync/playback", &config, nil)
+        if err == nil && resp != nil {
+            var results []map[string]interface{}
+            json.NewDecoder(resp.Body).Decode(&results)
+            resp.Body.Close()
+            for _, item := range results {
+                var itemID string
+                // SAFE CHECK: Ensure type exists
+                pType, _ := item["type"].(string)
+                
+                if pType == "episode" {
+                    // SAFE CHECK: Nested show and episode objects
+                    show, ok1 := item["show"].(map[string]interface{})
+                    ep, ok2 := item["episode"].(map[string]interface{})
+                    if ok1 && ok2 {
+                        ids, _ := show["ids"].(map[string]interface{})
+                        imdb, _ := ids["imdb"].(string)
+                        if imdb != "" {
+                            itemID = fmt.Sprintf("%s:%v:%v", imdb, ep["season"], ep["number"])
+                        }
+                    }
+                } else if pType == "movie" {
+                    movie, ok := item["movie"].(map[string]interface{})
+                    if ok {
+                        ids, _ := movie["ids"].(map[string]interface{})
+                        imdb, _ := ids["imdb"].(string)
+                        itemID = imdb
+                    }
+                }
 
-            if itemID == id {
-                fmt.Printf("%v", item["progress"])
-                return
+                if itemID != "" && itemID == id {
+                    fmt.Printf("%v", item["progress"])
+                    return
+                }
             }
         }
-    }
 
-	case "check-progress":
-    // Fetch all current playback bookmarks
-    resp, err := traktRequest("GET", "sync/playback", &config, nil)
-    if err == nil {
-        var results []map[string]interface{}
-        json.NewDecoder(resp.Body).Decode(&results)
-        
-        if len(results) == 0 {
-            fmt.Println("No active progress bookmarks found.")
-            return
-        }
-
-        fmt.Println("--- Active Trakt Bookmarks ---")
-        for _, item := range results {
-            progress := item["progress"].(float64)
-            pType := item["type"].(string)
+    case "check-progress":
+        resp, err := traktRequest("GET", "sync/playback", &config, nil)
+        if err == nil && resp != nil {
+            var results []map[string]interface{}
+            json.NewDecoder(resp.Body).Decode(&results)
+            resp.Body.Close()
             
-            var title string
-            if pType == "episode" {
-                show := item["show"].(map[string]interface{})
-                title = fmt.Sprintf("%v (S%vE%v)", show["title"], item["episode"].(map[string]interface{})["season"], item["episode"].(map[string]interface{})["number"])
-            } else {
-                title = fmt.Sprintf("%v", item["movie"].(map[string]interface{})["title"])
+            fmt.Println("--- Active Trakt Bookmarks ---")
+            for _, item := range results {
+                progress, _ := item["progress"].(float64)
+                pType, _ := item["type"].(string)
+                
+                var title string
+                if pType == "episode" {
+                    show, ok1 := item["show"].(map[string]interface{})
+                    ep, ok2 := item["episode"].(map[string]interface{})
+                    if ok1 && ok2 {
+                        title = fmt.Sprintf("%v (S%vE%v)", show["title"], ep["season"], ep["number"])
+                    }
+                } else if pType == "movie" {
+                    movie, ok := item["movie"].(map[string]interface{})
+                    if ok {
+                        title = fmt.Sprintf("%v", movie["title"])
+                    }
+                }
+                
+                if title != "" {
+                    fmt.Printf("[%s] %s: %.1f%%\n", pType, title, progress)
+                }
             }
-            
-            fmt.Printf("[%s] %s: %.1f%%\n", pType, title, progress)
-        }
-    }
+        }	
 
 	case "progress":
     // args: [2]=type, [3]=id, [4]=percentage
