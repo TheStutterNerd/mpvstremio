@@ -291,36 +291,51 @@ func main() {
     		}
 		}
 
-  case "collection":
-    // args: [2] = movies or shows
-    endpoint := "sync/collection/" + os.Args[2]
-    resp, _ := traktRequest("GET", endpoint, &config, nil)
+  	case "collection":
+    	// args: [2] = movies or shows
+    	endpoint := "sync/collection/" + os.Args[2]
+    	resp, _ := traktRequest("GET", endpoint, &config, nil)
+    	if resp == nil { return }
+    	var items []TraktItem
+    	json.NewDecoder(resp.Body).Decode(&items)
+    	for _, item := range items {
+        	if item.Movie != nil { 
+            	fmt.Printf("movie|%s|%s (%d)\n", item.Movie.IDs.IMDB, item.Movie.Title, item.Movie.Year)
+        	} else if item.Show != nil { 
+            	fmt.Printf("series|%s|%s\n", item.Show.IDs.IMDB, item.Show.Title) 
+        	}
+    	}
+
+	
+	case "history":
+    resp, _ := traktRequest("GET", "sync/history?limit=100", &config, nil)
     if resp == nil { return }
+    
     var items []TraktItem
     json.NewDecoder(resp.Body).Decode(&items)
+    
+    seen := make(map[string]bool)
+    count := 0
     for _, item := range items {
-        if item.Movie != nil { 
-            fmt.Printf("movie|%s|%s (%d)\n", item.Movie.IDs.IMDB, item.Movie.Title, item.Movie.Year)
-        } else if item.Show != nil { 
-            fmt.Printf("series|%s|%s\n", item.Show.IDs.IMDB, item.Show.Title) 
+        var id, title string
+        
+        if item.Type == "movie" && item.Movie != nil {
+            id = item.Movie.IDs.IMDB
+            title = fmt.Sprintf("movie|%s|%s (%d)", id, item.Movie.Title, item.Movie.Year)
+        } else if item.Type == "episode" && item.Show != nil {
+            id = item.Show.IDs.IMDB
+            title = fmt.Sprintf("series|%s|%s [Last: S%dE%d]", id, item.Show.Title, item.Episode.Season, item.Episode.Number)
         }
-    }
 
-	case "history":
-		resp, _ := traktRequest("GET", "sync/history?limit=30", &config, nil)
-		if resp == nil { return }
-		var items []TraktItem
-		json.NewDecoder(resp.Body).Decode(&items)
-		seen := make(map[string]bool)
-		for _, item := range items {
-			if item.Type == "movie" && item.Movie != nil && !seen[item.Movie.IDs.IMDB] {
-				fmt.Printf("movie|%s|%s (%d)\n", item.Movie.IDs.IMDB, item.Movie.Title, item.Movie.Year)
-				seen[item.Movie.IDs.IMDB] = true
-			} else if item.Type == "episode" && item.Show != nil && !seen[item.Show.IDs.IMDB] {
-				fmt.Printf("series|%s|%s [Last: S%dE%d]\n", item.Show.IDs.IMDB, item.Show.Title, item.Episode.Season, item.Episode.Number)
-				seen[item.Show.IDs.IMDB] = true
-			}
-		}
+        if id != "" && !seen[id] {
+            fmt.Println(title)
+            seen[id] = true
+            count++
+        }
+        
+        // Stop after showing 15 unique shows to keep the menu snappy
+        if count >= 15 { break }
+    }
 	case "watchlist", "trending":
 		endpoint := "sync/watchlist/" + os.Args[2]
 		if cmd == "trending" { endpoint = os.Args[2] + "/trending?limit=20" }
