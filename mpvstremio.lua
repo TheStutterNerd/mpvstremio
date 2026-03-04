@@ -1,9 +1,11 @@
 local mp = require 'mp'
 local utils = require 'mp.utils'
 
+-- Points directly to ~/.config/mpv/stremio-bridge
 local BRIDGE_PATH = mp.command_native({"expand-path", "~~/stremio-bridge"})
 local last_query = ""
 
+-- Search function that calls the Go bridge
 local function perform_search(stype, query)
     if not query or query == "" then return end
     last_query = query
@@ -40,6 +42,7 @@ local function perform_search(stype, query)
     end)
 end
 
+-- Stream fetching and playback logic
 local function play(stype, id)
     mp.osd_message("Fetching Stream...", 5)
     mp.command_native_async({
@@ -58,7 +61,7 @@ local function play(stype, id)
     end)
 end
 
--- FIX: Capture all arguments (words) and join them with spaces
+-- Handlers for search callbacks and episode listing
 mp.register_script_message("stremio-search-type-callback", function(stype, ...)
     local arg = {...}
     local query = table.concat(arg, " ")
@@ -88,18 +91,7 @@ end)
 mp.register_script_message("stremio-play-movie", function(id) play("movie", id) end)
 mp.register_script_message("stremio-play-series", function(id) play("series", id) end)
 
-mp.add_key_binding("b", "stremio-menu", function()
-    local menu = {
-        type = "stremio_main",
-        title = "Stremio",
-        items = {
-            { title = "Search Movies", value = "script-message stremio-category-select movie" },
-            { title = "Search Shows", value = "script-message stremio-category-select series" }
-        }
-    }
-    mp.commandv("script-message-to", "uosc", "open-menu", utils.format_json(menu))
-end)
-
+-- Category Selection
 mp.register_script_message("stremio-category-select", function(stype)
     last_query = ""
     mp.commandv("script-message-to", "uosc", "open-menu", utils.format_json({
@@ -110,4 +102,17 @@ mp.register_script_message("stremio-category-select", function(stype)
         search_delay = 1000,
         on_search = "script-message stremio-search-type-callback " .. stype
     }))
+end)
+
+-- Main Menu Binding (Map this in input.conf as 'script-binding stremio-menu')
+mp.add_key_binding(nil, "stremio-menu", function()
+    local menu = {
+        type = "stremio_main",
+        title = "Stremio",
+        items = {
+            { title = "Search Movies", value = "script-message stremio-category-select movie" },
+            { title = "Search Shows", value = "script-message stremio-category-select series" }
+        }
+    }
+    mp.commandv("script-message-to", "uosc", "open-menu", utils.format_json(menu))
 end)
