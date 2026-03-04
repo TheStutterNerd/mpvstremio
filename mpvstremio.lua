@@ -5,7 +5,7 @@ local utils = require 'mp.utils'
 local BRIDGE_PATH = mp.command_native({"expand-path", "~~/stremio-bridge"})
 local last_query = ""
 
--- Generic function to display list results (used for Trakt Watchlist)
+-- Generic function to display list results (used for Search, Watchlist, and History)
 local function display_list_results(res, title_text)
     local items = {}
     if res.status == 0 and res.stdout then
@@ -74,6 +74,17 @@ mp.register_script_message("stremio-trakt-watchlist", function(stype)
         args = {BRIDGE_PATH, "watchlist", stype}
     }, function(success, res)
         display_list_results(res, "Trakt Watchlist: " .. stype:upper())
+    end)
+end)
+
+-- Trakt History Function
+mp.register_script_message("stremio-trakt-history", function()
+    mp.osd_message("Syncing Trakt History...", 2)
+    mp.command_native_async({
+        name = "subprocess", capture_stdout = true, playback_only = false,
+        args = {BRIDGE_PATH, "history"}
+    }, function(success, res)
+        display_list_results(res, "Recently Watched")
     end)
 end)
 
@@ -147,6 +158,7 @@ mp.add_key_binding(nil, "stremio-menu", function()
         items = {
             { title = "Search Movies", value = "script-message stremio-category-select movie" },
             { title = "Search Shows", value = "script-message stremio-category-select series" },
+            { title = "Recently Watched", value = "script-message stremio-trakt-history" },
             { title = "---", value = "ignore" },
             { title = "Trakt Movie Watchlist", value = "script-message stremio-trakt-watchlist movies" },
             { title = "Trakt Show Watchlist", value = "script-message stremio-trakt-watchlist shows" }

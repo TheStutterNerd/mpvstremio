@@ -53,6 +53,7 @@ type ScoredMeta      struct {
 }
 
 type TraktItem struct {
+	Type  string `json:"type"`
 	Movie *struct {
 		Title string `json:"title"`
 		Year  int    `json:"year"`
@@ -60,9 +61,13 @@ type TraktItem struct {
 	} `json:"movie"`
 	Show *struct {
 		Title string `json:"title"`
-		Year  int    `json:"year"`
 		IDs   struct{ IMDB string `json:"imdb"` } `json:"ids"`
 	} `json:"show"`
+	Episode *struct {
+		Title  string `json:"title"`
+		Season int    `json:"season"`
+		Number int    `json:"number"`
+	} `json:"episode"`
 }
 
 func loadConfig() Config {
@@ -123,24 +128,25 @@ func refreshTraktToken(conf *Config) bool {
 	return true
 }
 
-func getTraktWatchlist(itemType string) {
-	config := loadConfig()
-	fetch := func() (*http.Response, error) {
-		client := &http.Client{Timeout: 10 * time.Second}
-		req, _ := http.NewRequest("GET", "https://api.trakt.tv/sync/watchlist/"+itemType, nil)
-		req.Header.Add("trakt-api-version", "2")
-		req.Header.Add("trakt-api-key", config.TraktClientID)
-		req.Header.Add("Authorization", "Bearer "+config.TraktToken)
-		return client.Do(req)
-	}
-
-	resp, err := fetch()
+func traktRequest(method, endpoint string, config *Config) (*http.Response, error) {
+	client := &http.Client{Timeout: 15 * time.Second}
+	req, _ := http.NewRequest(method, "https://api.trakt.tv/"+endpoint, nil)
+	req.Header.Add("trakt-api-version", "2")
+	req.Header.Add("trakt-api-key", config.TraktClientID)
+	req.Header.Add("Authorization", "Bearer "+config.TraktToken)
+	
+	resp, err := client.Do(req)
 	if err == nil && resp.StatusCode == 401 {
-		if refreshTraktToken(&config) {
-			resp, err = fetch()
+		if refreshTraktToken(config) {
+			return traktRequest(method, endpoint, config) // Recursive retry
 		}
 	}
+	return resp, err
+}
 
+func getTraktWatchlist(itemType string) {
+	config := loadConfig()
+	resp, err := traktRequest("GET", "sync/watchlist/"+itemType, &config)
 	if err != nil || resp == nil || resp.StatusCode != 200 { return }
 	defer resp.Body.Close()
 
@@ -150,7 +156,31 @@ func getTraktWatchlist(itemType string) {
 		if itemType == "movies" && item.Movie != nil {
 			fmt.Printf("movie|%s|%s (%d)\n", item.Movie.IDs.IMDB, item.Movie.Title, item.Movie.Year)
 		} else if itemType == "shows" && item.Show != nil {
-			fmt.Printf("series|%s|%s (%d)\n", item.Show.IDs.IMDB, item.Show.Title, item.Show.Year)
+			fmt.Printf("series|%s|%s\n", item.Show.IDs.IMDB, item.Show.Title)
+		}
+	}
+}
+
+func getTraktHistory() {
+	config := loadConfig()
+	resp, err := traktRequest("GET", "sync/history?limit=30", &config)
+	if err != nil || resp == nil || resp.StatusCode != 200 { return }
+	defer resp.Body.Close()
+
+	var items []TraktItem
+	json.NewDecoder(resp.Body).Decode(&items)
+	// Track unique IDs to avoid duplicates if someone watched multiple eps of same show
+	seen := make(map[string]bool)
+
+	for _, item := range items {
+		if item.Type == "movie" && item.Movie != nil {
+			if seen[item.Movie.IDs.IMDB] { continue }
+			fmt.Printf("movie|%s|%s (%d)\n", item.Movie.IDs.IMDB, item.Movie.Title, item.Movie.Year)
+			seen[item.Movie.IDs.IMDB] = true
+		} else if item.Type == "episode" && item.Show != nil {
+			if seen[item.Show.IDs.IMDB] { continue }
+			fmt.Printf("series|%s|%s [Last: S%dE%d]\n", item.Show.IDs.IMDB, item.Show.Title, item.Episode.Season, item.Episode.Number)
+			seen[item.Show.IDs.IMDB] = true
 		}
 	}
 }
@@ -235,6 +265,8 @@ func main() {
 	case "watchlist":
 		if len(os.Args) < 3 { return }
 		getTraktWatchlist(os.Args[2])
+	case "history":
+		getTraktHistory()
 	case "episodes": getEpisodes(os.Args[2])
 	case "stream": getStream(os.Args[2], os.Args[3])
 	}
