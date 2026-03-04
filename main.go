@@ -92,7 +92,10 @@ func traktRequest(method, endpoint string, config *Config, body []byte) (*http.R
 			})
 			r, _ := http.Post("https://api.trakt.tv/oauth/token", "application/json", bytes.NewBuffer(data))
 			if r != nil && r.StatusCode == 200 {
-				var res struct { AccessToken, RefreshToken string `json:"access_token"` }
+				var res struct { 
+    				AccessToken  string `json:"access_token"` 
+    				RefreshToken string `json:"refresh_token"` 
+				}
 				json.NewDecoder(r.Body).Decode(&res)
 				config.TraktToken, config.TraktRefreshToken = res.AccessToken, res.RefreshToken
 				saveConfig(*config)
