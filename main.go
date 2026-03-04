@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"strconv"
 )
 
 type Config struct {
@@ -67,12 +68,18 @@ func saveConfig(conf Config) {
 	os.WriteFile(confPath, []byte(content), 0644)
 }
 
-func traktRequest(method, endpoint string, config *Config) (*http.Response, error) {
+func traktRequest(method, endpoint string, config *Config, body []byte) (*http.Response, error) {
 	client := &http.Client{Timeout: 20 * time.Second}
 	var resp *http.Response
 	var err error
 	for i := 0; i < 3; i++ {
-		req, _ := http.NewRequest(method, "https://api.trakt.tv/"+endpoint, nil)
+		var req *http.Request
+		if body != nil {
+			req, _ = http.NewRequest(method, "https://api.trakt.tv/"+endpoint, bytes.NewBuffer(body))
+			req.Header.Add("Content-Type", "application/json")
+		} else {
+			req, _ = http.NewRequest(method, "https://api.trakt.tv/"+endpoint, nil)
+		}
 		req.Header.Add("trakt-api-version", "2")
 		req.Header.Add("trakt-api-key", config.TraktClientID)
 		req.Header.Add("Authorization", "Bearer "+config.TraktToken)
@@ -103,8 +110,43 @@ func main() {
 	cmd, config := os.Args[1], loadConfig()
 
 	switch cmd {
+	case "scrobble":
+    itemType, id := os.Args[2], os.Args[3]
+    var payload map[string]interface{}
+
+    if strings.Contains(id, ":") {
+        // Handle composite ID: tt12345:1:5
+        parts := strings.Split(id, ":")
+        showID := parts[0]
+        season, _ := strconv.Atoi(parts[1])
+        episode, _ := strconv.Atoi(parts[2])
+
+        payload = map[string]interface{}{
+            "episodes": []map[string]interface{}{
+                {
+                    "ids": map[string]string{"imdb": showID}, // Trakt can find it via Show ID + S/E
+                    "season": season,
+                    "number": episode,
+                },
+            },
+        }
+    } else {
+        // Handle simple Movie ID
+        payload = map[string]interface{}{
+            itemType + "s": []map[string]interface{}{
+                {"ids": map[string]string{"imdb": id}},
+            },
+        }
+    }
+
+    body, _ := json.Marshal(payload)
+    resp, err := traktRequest("POST", "sync/history", &config, body)
+    if err == nil {
+        fmt.Printf("TRAKT_DEBUG: Sent %s | Status: %d\n", id, resp.StatusCode)
+    }
+
 	case "history":
-		resp, _ := traktRequest("GET", "sync/history?limit=30", &config)
+		resp, _ := traktRequest("GET", "sync/history?limit=30", &config, nil)
 		if resp == nil { return }
 		var items []TraktItem
 		json.NewDecoder(resp.Body).Decode(&items)
@@ -121,7 +163,7 @@ func main() {
 	case "watchlist", "trending":
 		endpoint := "sync/watchlist/" + os.Args[2]
 		if cmd == "trending" { endpoint = os.Args[2] + "/trending?limit=20" }
-		resp, _ := traktRequest("GET", endpoint, &config)
+		resp, _ := traktRequest("GET", endpoint, &config, nil)
 		if resp == nil { return }
 		var items []TraktItem
 		json.NewDecoder(resp.Body).Decode(&items)
