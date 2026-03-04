@@ -35,8 +35,10 @@ Place the stremio-bridge executable in your main MPV config folder (usually ~/.c
 ### 3. Configuration
 Create a mpvstremio.conf file in the same directory as the bridge:
 
+```ini
 REAL_DEBRID_ENABLED=true
 REAL_DEBRID_KEY=YOUR_API_KEY_HERE
+```
 
 ### 4. Install the Script
 Copy mpvstremio.lua to your MPV scripts folder.
