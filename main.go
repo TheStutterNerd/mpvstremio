@@ -110,6 +110,91 @@ func main() {
 	cmd, config := os.Args[1], loadConfig()
 
 	switch cmd {
+	case "get-progress":
+    _, id := os.Args[2], os.Args[3]
+    resp, err := traktRequest("GET", "sync/playback", &config, nil)
+    if err == nil {
+        var results []map[string]interface{}
+        json.NewDecoder(resp.Body).Decode(&results)
+        for _, item := range results {
+            // Check if this bookmark matches our current ID
+            var itemID string
+            if item["type"] == "episode" {
+                // Construct the tt123:s:e format
+                show := item["show"].(map[string]interface{})["ids"].(map[string]interface{})["imdb"].(string)
+                ep := item["episode"].(map[string]interface{})
+                itemID = fmt.Sprintf("%s:%v:%v", show, ep["season"], ep["number"])
+            } else {
+                itemID = item["movie"].(map[string]interface{})["ids"].(map[string]interface{})["imdb"].(string)
+            }
+
+            if itemID == id {
+                fmt.Printf("%v", item["progress"])
+                return
+            }
+        }
+    }
+
+	case "check-progress":
+    // Fetch all current playback bookmarks
+    resp, err := traktRequest("GET", "sync/playback", &config, nil)
+    if err == nil {
+        var results []map[string]interface{}
+        json.NewDecoder(resp.Body).Decode(&results)
+        
+        if len(results) == 0 {
+            fmt.Println("No active progress bookmarks found.")
+            return
+        }
+
+        fmt.Println("--- Active Trakt Bookmarks ---")
+        for _, item := range results {
+            progress := item["progress"].(float64)
+            pType := item["type"].(string)
+            
+            var title string
+            if pType == "episode" {
+                show := item["show"].(map[string]interface{})
+                title = fmt.Sprintf("%v (S%vE%v)", show["title"], item["episode"].(map[string]interface{})["season"], item["episode"].(map[string]interface{})["number"])
+            } else {
+                title = fmt.Sprintf("%v", item["movie"].(map[string]interface{})["title"])
+            }
+            
+            fmt.Printf("[%s] %s: %.1f%%\n", pType, title, progress)
+        }
+    }
+
+	case "progress":
+    // args: [2]=type, [3]=id, [4]=percentage
+    _, id, percentStr := os.Args[2], os.Args[3], os.Args[4]
+    percent, _ := strconv.ParseFloat(percentStr, 64)
+
+    var payload map[string]interface{}
+    if strings.Contains(id, ":") {
+        parts := strings.Split(id, ":")
+        showID := parts[0]
+        s, _ := strconv.Atoi(parts[1])
+        e, _ := strconv.Atoi(parts[2])
+
+        payload = map[string]interface{}{
+            "progress": percent,
+            "show":     map[string]interface{}{"ids": map[string]string{"imdb": showID}},
+            "episode":  map[string]interface{}{"season": s, "number": e},
+        }
+    } else {
+        payload = map[string]interface{}{
+            "progress": percent,
+            "movie":    map[string]interface{}{"ids": map[string]string{"imdb": id}},
+        }
+    }
+
+    body, _ := json.Marshal(payload)
+    // We use the /scrobble/pause endpoint to save the resume point
+    resp, err := traktRequest("POST", "scrobble/pause", &config, body)
+    if err == nil && resp.StatusCode == 201 {
+        fmt.Printf("TRAKT: Progress saved at %.0f%%\n", percent)
+    }
+
 	case "scrobble":
     _, id := os.Args[2], os.Args[3]
     var payload map[string]interface{}

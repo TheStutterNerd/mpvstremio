@@ -39,18 +39,72 @@ mp.register_script_message("stremio-trakt-history", function()
 end)
 
 -- Playback logic with Scrobble Tracking
+-- Playback logic with Scrobble Tracking
 local function play(stype, id)
     current_id = id
     current_type = stype
     scrobbled = false
+    
+    -- FORCE MPV to ignore its local memory for this file
+    mp.set_property_bool("save-position-on-quit", false)
+    mp.set_property("watch-later-directory", "")
+    
     mp.osd_message("Fetching Stream...", 5)
+    
     mp.command_native_async({ name = "subprocess", capture_stdout = true, playback_only = false, args = {BRIDGE_PATH, "stream", stype, id} }, function(s, res)
-        if not s or res.status ~= 0 or not res.stdout then mp.osd_message("Error", 3) return end
+        if not s or res.status ~= 0 or not res.stdout then return end
+        
         local url = ""
-        for line in res.stdout:gmatch("[^\r\n]+") do if line:find("http") == 1 or line:find("magnet") == 1 then url = line:gsub("%s+", "") end end
-        if url ~= "" then mp.commandv("loadfile", url, "replace") else mp.osd_message("No link found", 3) end
+        for line in res.stdout:gmatch("[^\r\n]+") do 
+            if line:find("http") == 1 or line:find("magnet") == 1 then url = line:gsub("%s+", "") end
+        end
+        
+        if url ~= "" then
+            mp.commandv("loadfile", url, "replace")
+            
+            -- Wait for file to load, then check Trakt progress
+            mp.add_timeout(1, function()
+                mp.command_native_async({ name = "subprocess", capture_stdout = true, args = {BRIDGE_PATH, "get-progress", stype, id} }, function(s2, res2)
+                    if res2 and res2.stdout ~= "" then
+                        local progress = tonumber(res2.stdout)
+                        if progress and progress > 1 and progress < 90 then
+                            -- Create the uosc menu
+                            local resume_menu = {
+                                type = "stremio_resume",
+                                title = "Resume from " .. math.floor(progress) .. "%?",
+                                items = {
+                                    { title = "Yes, Resume", value = "script-message stremio-do-resume " .. progress }, 
+                                    { title = "No, Start Over", value = "ignore" }
+                                }
+                            }
+                            -- Ensure the JSON is formatted correctly for uosc
+                            mp.commandv("script-message-to", "uosc", "open-menu", utils.format_json(resume_menu))
+                        end
+                    end
+                end)
+            end)
+        end
     end)
 end
+
+-- Listener for the Resume Menu selection
+mp.register_script_message("stremio-do-resume", function(percent_str)
+    local p = tonumber(percent_str)
+    if not p then return end
+
+    -- We use a small delay to let the stream initialize
+    mp.add_timeout(0.5, function()
+        local duration = mp.get_property_number("duration")
+        if duration and duration > 0 then
+            local seek_time = (p / 100) * duration
+            mp.commandv("seek", seek_time, "absolute", "exact")
+        else
+            -- Fallback if duration isn't available yet
+            mp.set_property_number("percent-pos", p)
+        end
+        mp.osd_message("Resumed to " .. math.floor(p) .. "%", 3)
+    end)
+end)
 
 -- SCROBBLE OBSERVER: Checks every 60 seconds
 mp.add_periodic_timer(60, function()
@@ -125,4 +179,22 @@ mp.add_key_binding(nil, "stremio-menu", function()
         }
     }
     pcall(function() mp.commandv("script-message-to", "uosc", "open-menu", utils.format_json(main_menu)) end)
+end)
+
+-- SYNC ON QUIT: Reports progress when closing
+mp.register_event("shutdown", function()
+    -- Only sync if we haven't scrobbled yet and have a file open
+    if not scrobbled and current_id and current_type then
+        local pos = mp.get_property_number("percent-pos")
+        -- Only sync if we've watched at least 1% but less than 85%
+        if pos and pos > 1 and pos < 85 then
+            -- We use 'command_native' (sync) instead of 'async' here 
+            -- because the script is about to die and async might get cut off
+            mp.command_native({
+                name = "subprocess",
+                playback_only = false,
+                args = {BRIDGE_PATH, "progress", current_type, current_id, tostring(pos)}
+            })
+        end
+    end
 end)
