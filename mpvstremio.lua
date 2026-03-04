@@ -116,13 +116,10 @@ mp.add_key_binding(nil, "stremio-menu", function()
             { title = "Search Movies", value = "script-message stremio-category-select movie" },
             { title = "Search Shows", value = "script-message stremio-category-select series" },
             { title = "Recently Watched", value = "script-message stremio-trakt-history" },
-            { title = "---", value = "ignore" },
             { title = "Movie Library", value = "script-message stremio-trakt-collection movies" },
             { title = "Show Library", value = "script-message stremio-trakt-collection shows" },
-            { title = "---", value = "ignore" },
             { title = "Trending Movies", value = "script-message stremio-trakt-trending movies" },
             { title = "Trending Shows", value = "script-message stremio-trakt-trending shows" },
-            { title = "---", value = "ignore" },
             { title = "Trakt Movie Watchlist", value = "script-message stremio-trakt-watchlist movies" },
             { title = "Trakt Show Watchlist", value = "script-message stremio-trakt-watchlist shows" }
         }
