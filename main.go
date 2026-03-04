@@ -138,7 +138,7 @@ func traktRequest(method, endpoint string, config *Config) (*http.Response, erro
 	resp, err := client.Do(req)
 	if err == nil && resp.StatusCode == 401 {
 		if refreshTraktToken(config) {
-			return traktRequest(method, endpoint, config) // Recursive retry
+			return traktRequest(method, endpoint, config)
 		}
 	}
 	return resp, err
@@ -161,6 +161,23 @@ func getTraktWatchlist(itemType string) {
 	}
 }
 
+func getTraktTrending(itemType string) {
+	config := loadConfig()
+	resp, err := traktRequest("GET", itemType+"/trending?limit=20", &config)
+	if err != nil || resp == nil || resp.StatusCode != 200 { return }
+	defer resp.Body.Close()
+
+	var items []TraktItem
+	json.NewDecoder(resp.Body).Decode(&items)
+	for _, item := range items {
+		if item.Movie != nil {
+			fmt.Printf("movie|%s|%s (%d)\n", item.Movie.IDs.IMDB, item.Movie.Title, item.Movie.Year)
+		} else if item.Show != nil {
+			fmt.Printf("series|%s|%s\n", item.Show.IDs.IMDB, item.Show.Title)
+		}
+	}
+}
+
 func getTraktHistory() {
 	config := loadConfig()
 	resp, err := traktRequest("GET", "sync/history?limit=30", &config)
@@ -169,7 +186,6 @@ func getTraktHistory() {
 
 	var items []TraktItem
 	json.NewDecoder(resp.Body).Decode(&items)
-	// Track unique IDs to avoid duplicates if someone watched multiple eps of same show
 	seen := make(map[string]bool)
 
 	for _, item := range items {
@@ -265,6 +281,9 @@ func main() {
 	case "watchlist":
 		if len(os.Args) < 3 { return }
 		getTraktWatchlist(os.Args[2])
+	case "trending":
+		if len(os.Args) < 3 { return }
+		getTraktTrending(os.Args[2])
 	case "history":
 		getTraktHistory()
 	case "episodes": getEpisodes(os.Args[2])
