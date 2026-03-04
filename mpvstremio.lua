@@ -5,6 +5,30 @@ local utils = require 'mp.utils'
 local BRIDGE_PATH = mp.command_native({"expand-path", "~~/stremio-bridge"})
 local last_query = ""
 
+-- Generic function to display list results (used for Trakt Watchlist)
+local function display_list_results(res, title_text)
+    local items = {}
+    if res.status == 0 and res.stdout then
+        for line in res.stdout:gmatch("[^\r\n]+") do
+            local line_type, id, name = line:match("([^|]+)|([^|]+)|(.+)")
+            if id then
+                local cmd = (line_type == "series") and "stremio-list-episodes" or "stremio-play-movie"
+                table.insert(items, { 
+                    title = name, 
+                    value = "script-message " .. cmd .. " " .. id 
+                })
+            end
+        end
+    end
+    
+    mp.commandv("script-message-to", "uosc", "open-menu", utils.format_json({
+        type = "stremio_list", 
+        title = title_text, 
+        items = items,
+        keep_open = true
+    }))
+end
+
 -- Search function that calls the Go bridge
 local function perform_search(stype, query)
     if not query or query == "" then return end
@@ -41,6 +65,17 @@ local function perform_search(stype, query)
         }))
     end)
 end
+
+-- Trakt Watchlist Function
+mp.register_script_message("stremio-trakt-watchlist", function(stype)
+    mp.osd_message("Syncing Trakt " .. stype .. "...", 2)
+    mp.command_native_async({
+        name = "subprocess", capture_stdout = true, playback_only = false,
+        args = {BRIDGE_PATH, "watchlist", stype}
+    }, function(success, res)
+        display_list_results(res, "Trakt Watchlist: " .. stype:upper())
+    end)
+end)
 
 -- Stream fetching and playback logic
 local function play(stype, id)
@@ -104,14 +139,17 @@ mp.register_script_message("stremio-category-select", function(stype)
     }))
 end)
 
--- Main Menu Binding (Map this in input.conf as 'script-binding stremio-menu')
+-- Main Menu Binding
 mp.add_key_binding(nil, "stremio-menu", function()
     local menu = {
         type = "stremio_main",
         title = "Stremio",
         items = {
             { title = "Search Movies", value = "script-message stremio-category-select movie" },
-            { title = "Search Shows", value = "script-message stremio-category-select series" }
+            { title = "Search Shows", value = "script-message stremio-category-select series" },
+            { title = "---", value = "ignore" },
+            { title = "Trakt Movie Watchlist", value = "script-message stremio-trakt-watchlist movies" },
+            { title = "Trakt Show Watchlist", value = "script-message stremio-trakt-watchlist shows" }
         }
     }
     mp.commandv("script-message-to", "uosc", "open-menu", utils.format_json(menu))

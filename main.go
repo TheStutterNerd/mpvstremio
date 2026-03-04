@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -10,20 +11,23 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 type Config struct {
-	RDEnabled bool
-	RDKey     string
-}
-
-type Stream struct {
-	URL      string `json:"url"`
-	InfoHash string `json:"infoHash"`
+	RDEnabled         bool
+	RDKey             string
+	TraktToken        string
+	TraktRefreshToken string
+	TraktClientID     string
+	TraktClientSecret string
 }
 
 type StreamResponse struct {
-	Streams []Stream `json:"streams"`
+	Streams []struct {
+		URL      string `json:"url"`
+		InfoHash string `json:"infoHash"`
+	} `json:"streams"`
 }
 
 type Video struct {
@@ -41,45 +45,119 @@ type Meta struct {
 	Videos []Video `json:"videos"`
 }
 
-type CatalogResponse struct {
-	Metas []Meta `json:"metas"`
-}
-
-type MetaResponse struct {
-	Meta Meta `json:"meta"`
-}
-
-type ScoredMeta struct {
+type CatalogResponse struct{ Metas []Meta `json:"metas"` }
+type MetaResponse    struct{ Meta Meta `json:"meta"` }
+type ScoredMeta      struct {
 	Meta  Meta
 	Score int
 }
 
+type TraktItem struct {
+	Movie *struct {
+		Title string `json:"title"`
+		Year  int    `json:"year"`
+		IDs   struct{ IMDB string `json:"imdb"` } `json:"ids"`
+	} `json:"movie"`
+	Show *struct {
+		Title string `json:"title"`
+		Year  int    `json:"year"`
+		IDs   struct{ IMDB string `json:"imdb"` } `json:"ids"`
+	} `json:"show"`
+}
+
 func loadConfig() Config {
-	conf := Config{RDEnabled: false, RDKey: ""}
+	conf := Config{}
 	exePath, _ := os.Executable()
 	confPath := filepath.Join(filepath.Dir(exePath), "mpvstremio.conf")
 	file, err := os.Open(confPath)
 	if err != nil { return conf }
 	defer file.Close()
+
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		parts := strings.SplitN(scanner.Text(), "=", 2)
 		if len(parts) == 2 {
 			k, v := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
-			if k == "REAL_DEBRID_ENABLED" {
-				conf.RDEnabled = strings.ToLower(v) == "true"
-			} else if k == "REAL_DEBRID_KEY" {
-				conf.RDKey = v
+			switch k {
+			case "REAL_DEBRID_ENABLED": conf.RDEnabled = strings.ToLower(v) == "true"
+			case "REAL_DEBRID_KEY":     conf.RDKey = v
+			case "TRAKT_ACCESS_TOKEN":  conf.TraktToken = v
+			case "TRAKT_REFRESH_TOKEN": conf.TraktRefreshToken = v
+			case "TRAKT_CLIENT_ID":     conf.TraktClientID = v
+			case "TRAKT_CLIENT_SECRET": conf.TraktClientSecret = v
 			}
 		}
 	}
 	return conf
 }
 
+func saveConfig(conf Config) {
+	exePath, _ := os.Executable()
+	confPath := filepath.Join(filepath.Dir(exePath), "mpvstremio.conf")
+	content := fmt.Sprintf("REAL_DEBRID_ENABLED=%v\nREAL_DEBRID_KEY=%s\nTRAKT_ACCESS_TOKEN=%s\nTRAKT_REFRESH_TOKEN=%s\nTRAKT_CLIENT_ID=%s\nTRAKT_CLIENT_SECRET=%s\n",
+		conf.RDEnabled, conf.RDKey, conf.TraktToken, conf.TraktRefreshToken, conf.TraktClientID, conf.TraktClientSecret)
+	os.WriteFile(confPath, []byte(content), 0644)
+}
+
+func refreshTraktToken(conf *Config) bool {
+	data := map[string]string{
+		"refresh_token": conf.TraktRefreshToken,
+		"client_id":     conf.TraktClientID,
+		"client_secret": conf.TraktClientSecret,
+		"grant_type":    "refresh_token",
+		"redirect_uri":  "urn:ietf:wg:oauth:2.0:oob",
+	}
+	body, _ := json.Marshal(data)
+	resp, err := http.Post("https://api.trakt.tv/oauth/token", "application/json", bytes.NewBuffer(body))
+	if err != nil || resp.StatusCode != 200 { return false }
+	defer resp.Body.Close()
+
+	var res struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+	}
+	json.NewDecoder(resp.Body).Decode(&res)
+	conf.TraktToken = res.AccessToken
+	conf.TraktRefreshToken = res.RefreshToken
+	saveConfig(*conf)
+	return true
+}
+
+func getTraktWatchlist(itemType string) {
+	config := loadConfig()
+	fetch := func() (*http.Response, error) {
+		client := &http.Client{Timeout: 10 * time.Second}
+		req, _ := http.NewRequest("GET", "https://api.trakt.tv/sync/watchlist/"+itemType, nil)
+		req.Header.Add("trakt-api-version", "2")
+		req.Header.Add("trakt-api-key", config.TraktClientID)
+		req.Header.Add("Authorization", "Bearer "+config.TraktToken)
+		return client.Do(req)
+	}
+
+	resp, err := fetch()
+	if err == nil && resp.StatusCode == 401 {
+		if refreshTraktToken(&config) {
+			resp, err = fetch()
+		}
+	}
+
+	if err != nil || resp == nil || resp.StatusCode != 200 { return }
+	defer resp.Body.Close()
+
+	var items []TraktItem
+	json.NewDecoder(resp.Body).Decode(&items)
+	for _, item := range items {
+		if itemType == "movies" && item.Movie != nil {
+			fmt.Printf("movie|%s|%s (%d)\n", item.Movie.IDs.IMDB, item.Movie.Title, item.Movie.Year)
+		} else if itemType == "shows" && item.Show != nil {
+			fmt.Printf("series|%s|%s (%d)\n", item.Show.IDs.IMDB, item.Show.Title, item.Show.Year)
+		}
+	}
+}
+
 func search(stype, query string) {
 	lowerQuery := strings.ToLower(strings.TrimSpace(query))
 	apiURL := fmt.Sprintf("https://v3-cinemeta.strem.io/catalog/%s/top/search=%s.json", stype, url.PathEscape(query))
-	
 	resp, err := http.Get(apiURL)
 	if err != nil || resp == nil { return }
 	defer resp.Body.Close()
@@ -98,15 +176,13 @@ func search(stype, query string) {
 		scoredList = append(scoredList, ScoredMeta{m, score})
 	}
 
-	sort.Slice(scoredList, func(i, j int) bool {
-		return scoredList[i].Score > scoredList[j].Score
-	})
+	sort.Slice(scoredList, func(i, j int) bool { return scoredList[i].Score > scoredList[j].Score })
 
 	for _, sm := range scoredList {
 		m := sm.Meta
-		yearInfo := ""
-		if m.Year != "" { yearInfo = " (" + m.Year + ")" }
-		fmt.Printf("%s|%s|%s%s\n", m.Type, m.ID, m.Name, yearInfo)
+		year := ""
+		if m.Year != "" { year = " (" + m.Year + ")" }
+		fmt.Printf("%s|%s|%s%s\n", m.Type, m.ID, m.Name, year)
 	}
 }
 
@@ -150,12 +226,15 @@ func getStream(contentType, id string) {
 }
 
 func main() {
-	if len(os.Args) < 3 { return }
+	if len(os.Args) < 2 { return }
 	cmd := os.Args[1]
 	switch cmd {
 	case "search":
 		if len(os.Args) < 4 { return }
 		search(os.Args[2], os.Args[3])
+	case "watchlist":
+		if len(os.Args) < 3 { return }
+		getTraktWatchlist(os.Args[2])
 	case "episodes": getEpisodes(os.Args[2])
 	case "stream": getStream(os.Args[2], os.Args[3])
 	}
