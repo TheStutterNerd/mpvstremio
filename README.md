@@ -30,7 +30,7 @@ Clone the repo and build the executable:
 
 go build -o stremio-bridge main.go
 
-Place the stremio-bridge executable in your MPV scripts folder (usually ~~/scripts/ or alongside the lua script).
+Place the stremio-bridge executable in your main MPV config folder (usually ~/.config/mpv/).
 
 ### 3. Configuration
 Create a mpvstremio.conf file in the same directory as the bridge:
@@ -43,9 +43,14 @@ Copy mpvstremio.lua to your MPV scripts folder.
 
 ## ⌨️ Controls
 
-* **`b`**: Open the Stremio Search Menu.
-* **Select the Category** then type your search query.
-* **Enter**: Select a Movie/Series or Episode.
+This script uses standard MPV script-bindings. To use it, add the following line to your `input.conf` file:
+
+b script-binding stremio-menu
+
+* **b**: Open the Stremio Search Menu (or whichever key you assigned).
+* **Select the Category**: Choose between Movies or Shows.
+* **Type and Enter**: Submit your search query.
+* **Enter**: Select a Movie/Series or Episode to play.
 
 ## ⚖️ License
 
