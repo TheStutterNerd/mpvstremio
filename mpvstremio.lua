@@ -196,22 +196,54 @@ mp.register_script_message("stremio-category-select", function(stype)
 end)
 
 mp.add_key_binding(nil, "stremio-menu", function()
-    local main_menu = {
-        type = "stremio_main_v3",
-        title = "Stremio",
-        items = {
-            { title = "Search Movies", value = "script-message stremio-category-select movie" },
-            { title = "Search Shows", value = "script-message stremio-category-select series" },
-            { title = "Recently Watched", value = "script-message stremio-trakt-history" },
-            { title = "Movie Library", value = "script-message stremio-trakt-collection movies" },
-            { title = "Show Library", value = "script-message stremio-trakt-collection shows" },
-            { title = "Trending Movies", value = "script-message stremio-trakt-trending movies" },
-            { title = "Trending Shows", value = "script-message stremio-trakt-trending shows" },
-            { title = "Trakt Movie Watchlist", value = "script-message stremio-trakt-watchlist movies" },
-            { title = "Trakt Show Watchlist", value = "script-message stremio-trakt-watchlist shows" }
-        }
+    local items = {
+        { title = "Search Movies", value = "script-message stremio-category-select movie" },
+        { title = "Search Shows", value = "script-message stremio-category-select series" },
+        { title = "Recently Watched", value = "script-message stremio-trakt-history" },
+        { title = "Movie Library", value = "script-message stremio-trakt-collection movies" },
+        { title = "Show Library", value = "script-message stremio-trakt-collection shows" },
+        { title = "Trending Movies", value = "script-message stremio-trakt-trending movies" },
+        { title = "Trending Shows", value = "script-message stremio-trakt-trending shows" },
+        { title = "Trakt Movie Watchlist", value = "script-message stremio-trakt-watchlist movies" },
+        { title = "Trakt Show Watchlist", value = "script-message stremio-trakt-watchlist shows" }
     }
+
+    -- DYNAMIC: Add "Skip to Next Episode" if we are watching a series
+    if current_type == "episode" and current_id then
+        table.insert(items, 1, { title = "⏭ Skip to Next Episode", value = "script-message stremio-manual-next" })
+        table.insert(items, 2, { title = "--------------------------------", value = "ignore" })
+    end
+
+    local main_menu = {
+        type = "stremio_main_v4",
+        title = "Stremio",
+        items = items
+    }
+    
     pcall(function() mp.commandv("script-message-to", "uosc", "open-menu", utils.format_json(main_menu)) end)
+end)
+
+mp.register_script_message("stremio-manual-next", function()
+    if not current_id or current_type ~= "episode" then return end
+    
+    mp.osd_message("Finding next episode...", 2)
+    
+    mp.command_native_async({
+        name = "subprocess",
+        capture_stdout = true,
+        args = {BRIDGE_PATH, "next-episode", current_id}
+    }, function(s, res)
+        if res and res.stdout ~= "" then
+            local n_type, n_id = res.stdout:match("([^|]+)|(.+)")
+            if n_id then
+                -- Close the menu and play immediately
+                mp.commandv("script-message-to", "uosc", "close-menu")
+                play(n_type, n_id)
+            else
+                mp.osd_message("No more episodes found.", 3)
+            end
+        end
+    end)
 end)
 
 -- SYNC ON QUIT: Reports progress when closing
