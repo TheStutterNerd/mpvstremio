@@ -118,26 +118,38 @@ mp.add_periodic_timer(10, function()
     if not current_id or not current_type then return end
     local pos = mp.get_property_number("percent-pos", 0)
 
+    -- 1. SCROBBLE LOGIC (Stays the same)
     if not scrobbled and pos > 85 then
-        mp.command_native_async({ name = "subprocess", playback_only = false, args = {BRIDGE_PATH, "scrobble", current_type, current_id} }, function()
+        mp.command_native_async({
+            name = "subprocess",
+            playback_only = false,
+            args = {BRIDGE_PATH, "scrobble", current_type, current_id} 
+        }, function()
             scrobbled = true
             mp.osd_message("Trakt: Watch History Synced", 3)
         end)
     end
 
+    -- 2. AUTO-NEXT PLAYLIST LOGIC
     if current_type == "episode" and pos > 95 and not up_next_triggered then
-        up_next_triggered = true
-        mp.command_native_async({ name = "subprocess", capture_stdout = true, args = {BRIDGE_PATH, "next-episode", current_id} }, function(s, res)
-            if res and res.stdout ~= "" then
-                local n_type, n_id = res.stdout:match("([^|]+)|(.+)")
-                if n_id then
-                    mp.commandv("script-message-to", "uosc", "show-text", "Up Next: Loading in 10 seconds...", 10)
-                    mp.add_timeout(10, function()
-                        if mp.get_property_number("percent-pos", 0) > 90 then play(n_type, n_id) end
-                    end)
+        local count = mp.get_property_number("playlist-count", 0)
+        local current_pos = mp.get_property_number("playlist-pos", 0)
+
+        -- Check if there's actually another episode in the playlist
+        if current_pos + 1 < count then
+            up_next_triggered = true
+            
+            -- Show uosc notification
+            mp.commandv("script-message-to", "uosc", "show-text", "Up Next: Starting in 10 seconds...", 10)
+            
+            mp.add_timeout(10, function()
+                -- Re-verify we are still near the end before jumping
+                local current_pct = mp.get_property_number("percent-pos", 0)
+                if current_pct > 90 then
+                    mp.command("playlist-next")
                 end
-            end
-        end)
+            end)
+        end
     end
 end)
 
@@ -151,22 +163,73 @@ mp.register_script_message("stremio-search-type-callback", function(stype, ...)
     end)
 end)
 
+local last_season_data = "" -- Add this to your global variables at the top
+
 mp.register_script_message("stremio-list-episodes", function(id)
     mp.osd_message("Loading episodes...", 2)
-    mp.command_native_async({ name = "subprocess", capture_stdout = true, playback_only = false, args = {BRIDGE_PATH, "episodes", id} }, function(s, res)
-        local items = {}
+    mp.command_native_async({
+        name = "subprocess", capture_stdout = true, playback_only = false,
+        args = {BRIDGE_PATH, "episodes", id}
+    }, function(s, res)
         if res and res.status == 0 and res.stdout then
-            for line in res.stdout:gmatch("[^\r\n]+") do
+            -- IMPORTANT: This line must execute before the menu is built
+            last_season_data = res.stdout
+            
+            local items = {}
+            for line in last_season_data:gmatch("[^\r\n]+") do
                 local eid, title = line:match("([^|]+)|(.+)")
-                if eid then table.insert(items, { title = title, value = "script-message stremio-play-series " .. eid }) end
+                if eid then
+                    table.insert(items, {
+                        title = title,
+                        value = "script-message stremio-play-series " .. eid
+                    })
+                end
+            end
+            mp.commandv("script-message-to", "uosc", "open-menu", utils.format_json({ type = "stremio_eps", title = "Select Episode", items = items }))
+        end
+    end)
+end)
+
+mp.register_script_message("stremio-play-series", function(id)
+    if last_season_data == "" then
+        mp.osd_message("Error: No season data found", 5)
+        return
+    end
+    
+    -- 1. KILL CURRENT PLAYBACK AND CLEAR LIST
+    mp.command("stop")
+    mp.command("playlist-clear")
+    
+    -- 2. WAIT A MOMENT FOR MPV TO FLUSH THE OLD STATE
+    mp.add_timeout(0.1, function()
+        local playlist_index = 0
+        local target_index = 0
+        
+        for line in last_season_data:gmatch("[^\r\n]+") do
+            local eid, title = line:match("([^|]+)|(.+)")
+            if eid then
+                local url = "stremio://episode/" .. eid
+                
+                -- Always append since we already cleared manually
+                mp.commandv("loadfile", url, "append")
+                
+                -- Manually set the title for the UI
+                mp.set_property_native("playlist/" .. playlist_index .. "/title", title)
+                
+                if eid == id then
+                    target_index = playlist_index
+                end
+                playlist_index = playlist_index + 1
             end
         end
-        mp.commandv("script-message-to", "uosc", "open-menu", utils.format_json({ type = "stremio_eps", title = "Select Episode", items = items }))
+
+        -- 3. JUMP TO THE SELECTED EPISODE
+        mp.set_property_number("playlist-pos", target_index)
+        mp.osd_message("Swapping Show: " .. playlist_index .. " episodes loaded", 2)
     end)
 end)
 
 mp.register_script_message("stremio-play-movie", function(id) play("movie", id) end)
-mp.register_script_message("stremio-play-series", function(id) play("episode", id) end)
 mp.register_script_message("stremio-category-select", function(stype)
     mp.commandv("script-message-to", "uosc", "open-menu", utils.format_json({ type = "stremio_results", title = "Search " .. stype, items = {}, search_style = "submit", on_search = "script-message stremio-search-type-callback " .. stype }))
 end)
@@ -195,16 +258,18 @@ end)
 
 mp.register_script_message("stremio-manual-next", function()
     if not current_id or current_type ~= "episode" then return end
-    mp.osd_message("Finding next episode...", 2)
-    mp.command_native_async({ name = "subprocess", capture_stdout = true, args = {BRIDGE_PATH, "next-episode", current_id} }, function(s, res)
-        if res and res.stdout ~= "" then
-            local n_type, n_id = res.stdout:match("([^|]+)|(.+)")
-            if n_id then
-                mp.commandv("script-message-to", "uosc", "close-menu")
-                play(n_type, n_id)
-            end
-        end
-    end)
+    
+    -- Check if there is actually a next item in the playlist
+    local count = mp.get_property_number("playlist-count", 0)
+    local pos = mp.get_property_number("playlist-pos", 0)
+    
+    if pos + 1 < count then
+        mp.osd_message("Skipping to next episode...", 2)
+        mp.commandv("script-message-to", "uosc", "close-menu")
+        mp.command("playlist-next")
+    else
+        mp.osd_message("End of Season", 3)
+    end
 end)
 
 -- 7. EVENTS & CLEANUP (Syncing on Quit)
@@ -222,6 +287,66 @@ mp.register_event("shutdown", function()
                 playback_only = false,
                 args = {BRIDGE_PATH, "progress", last_active_type, last_active_id, tostring(last_pos)}
             })
+        end
+    end
+end)
+
+mp.add_hook("on_load", 50, function()
+    local url = mp.get_property("stream-open-filename", "")
+    if url:find("stremio://") == 1 then
+        local stype, id = url:match("stremio://([^/]+)/(.+)")
+        
+        -- Update global tracking
+        current_id = id
+        current_type = stype
+        last_active_id = id
+        last_active_type = stype
+        scrobbled = false
+        up_next_triggered = false
+        
+        mp.osd_message("Resolving Stream...", 5)
+        
+        -- 1. Get the real stream URL
+        local res = mp.command_native({
+            name = "subprocess", capture_stdout = true, playback_only = false,
+            args = {BRIDGE_PATH, "stream", stype, id}
+        })
+        
+        if res and res.status == 0 and res.stdout then
+            local real_url = ""
+            for line in res.stdout:gmatch("[^\r\n]+") do
+                if line:find("http") == 1 or line:find("magnet") == 1 then
+                    real_url = line:gsub("%s+", "")
+                end
+            end
+            
+            if real_url ~= "" then
+                mp.set_property("stream-open-filename", real_url)
+                
+                -- 2. NEW: Check for Resume Progress via the Bridge
+                -- We do this as an async call so it doesn't hang the player
+                mp.command_native_async({
+                    name = "subprocess",
+                    capture_stdout = true,
+                    args = {BRIDGE_PATH, "get-progress", stype, id}
+                }, function(s2, res2)
+                    if res2 and res2.stdout ~= "" then
+                        local progress = tonumber(res2.stdout)
+                        -- Only ask if progress is between 1% and 90%
+                        if progress and progress > 1 and progress < 90 then
+                            local resume_menu = {
+                                type = "stremio_resume",
+                                title = "Resume from " .. math.floor(progress) .. "%?",
+                                items = {
+                                    { title = "Yes, Resume", value = "script-message stremio-do-resume " .. progress },
+                                    { title = "No, Start Over", value = "ignore" }
+                                }
+                            }
+                            mp.commandv("script-message-to", "uosc", "open-menu", utils.format_json(resume_menu))
+                        end
+                    end
+                end)
+            end
         end
     end
 end)
