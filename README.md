@@ -21,7 +21,7 @@ This project bypasses the heavy Stremio Desktop Electron app, offering a hardwar
 
 The project consists of two main components:
 * **The Bridge (main.go):** A compiled CLI tool that communicates with Cinemeta, Torrentio, and Trakt APIs. It handles data processing, OAuth2 authentication, and stream fetching.
-* **The UI (mpvstremio.lua):** A Lua script for MPV that handles user input and renders menus using the uosc framework. It uses a synchronous shutdown hook to ensure playback progress is synced to Trakt before the player exits.
+* **The UI (mpvstremio.lua):** A Lua script for MPV that manages the entire lifecycle of a streaming session. It interfaces with the **uosc framework** to render high-performance menus, monitors player properties for **Smart Scrobbling** and **Auto-Play** triggers, and utilizes a "Double-Lock" variable system to ensure playback progress is synced to Trakt during the shutdown sequence.
 
 ## 🚀 Installation
 
