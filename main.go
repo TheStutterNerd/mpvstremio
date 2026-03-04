@@ -110,6 +110,48 @@ func main() {
 	cmd, config := os.Args[1], loadConfig()
 
 	switch cmd {
+	case "next-episode":
+    // Input format: tt12345:4:1
+    idParts := strings.Split(os.Args[2], ":")
+    if len(idParts) < 3 { return }
+    
+    imdbID := idParts[0]
+    currS, _ := strconv.Atoi(idParts[1])
+    currE, _ := strconv.Atoi(idParts[2])
+
+    // Fetch all episodes for this show
+    resp, err := traktRequest("GET", fmt.Sprintf("shows/%s/seasons?extended=episodes", imdbID), &config, nil)
+    if err == nil {
+        var seasons []map[string]interface{}
+        json.NewDecoder(resp.Body).Decode(&seasons)
+        
+        // Logic: Find current E+1, or if E is last, find S+1, E1
+        nextS, nextE := currS, currE+1
+        found := false
+
+        for _, s := range seasons {
+            sNum := int(s["number"].(float64))
+            if sNum == nextS {
+                eps := s["episodes"].([]interface{})
+                if nextE <= len(eps) {
+                    found = true
+                } else {
+                    nextS++
+                    nextE = 1
+                    // Check if next season exists
+                    for _, sNext := range seasons {
+                        if int(sNext["number"].(float64)) == nextS {
+                            found = true; break
+                        }
+                    }
+                }
+            }
+        }
+        if found {
+            fmt.Printf("episode|%s:%d:%d", imdbID, nextS, nextE)
+        }
+    }
+
 	case "get-progress":
     _, id := os.Args[2], os.Args[3]
     resp, err := traktRequest("GET", "sync/playback", &config, nil)

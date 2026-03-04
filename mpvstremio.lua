@@ -105,17 +105,51 @@ mp.register_script_message("stremio-do-resume", function(percent_str)
     end)
 end)
 
--- SCROBBLE OBSERVER: Checks every 60 seconds
-mp.add_periodic_timer(60, function()
-    if scrobbled or not current_id or not current_type then return end
+-- SCROBBLE & UP-NEXT OBSERVER: Checks every 10 seconds for better responsiveness
+mp.add_periodic_timer(10, function()
+    if not current_id or not current_type then return end
+    
     local pos = mp.get_property_number("percent-pos", 0)
-    if pos > 85 then -- Sync once you've watched 85%
+
+    -- 1. SCROBBLE LOGIC (85%)
+    if not scrobbled and pos > 85 then
         mp.command_native_async({
             name = "subprocess", playback_only = false,
             args = {BRIDGE_PATH, "scrobble", current_type, current_id}
-        }, function() 
-            scrobbled = true 
+        }, function()
+            scrobbled = true
             mp.osd_message("Trakt: Watch History Synced", 3)
+        end)
+    end
+
+    -- 2. AUTO-PLAY LOGIC (95%)
+    -- Only for series, and only if we haven't triggered it for this file yet
+    if current_type == "episode" and pos > 95 and not up_next_triggered then
+        up_next_triggered = true
+        
+        mp.command_native_async({
+            name = "subprocess",
+            capture_stdout = true,
+            args = {BRIDGE_PATH, "next-episode", current_id}
+        }, function(s, res)
+            if res and res.stdout ~= "" then
+                -- Expecting format: episode|tt123:S:E
+                local n_type, n_id = res.stdout:match("([^|]+)|(.+)")
+                
+                if n_id then
+                    -- Notify the user via uosc
+                    mp.commandv("script-message-to", "uosc", "show-text", "Up Next: Loading in 10 seconds...", 10)
+                    
+                    -- Wait 10 seconds then jump to the next episode
+                    mp.add_timeout(10, function()
+                        -- Double check we are still at the end of the video before jumping
+                        local current_pos = mp.get_property_number("percent-pos", 0)
+                        if current_pos > 90 then
+                            play(n_type, n_id)
+                        end
+                    end)
+                end
+            end
         end)
     end
 end)
