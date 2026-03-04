@@ -111,39 +111,55 @@ func main() {
 
 	switch cmd {
 	case "scrobble":
-    itemType, id := os.Args[2], os.Args[3]
+    _, id := os.Args[2], os.Args[3]
     var payload map[string]interface{}
 
     if strings.Contains(id, ":") {
-        // Handle composite ID: tt12345:1:5
         parts := strings.Split(id, ":")
-        showID := parts[0]
-        season, _ := strconv.Atoi(parts[1])
-        episode, _ := strconv.Atoi(parts[2])
+        showIMDB := parts[0]
+        s, _ := strconv.Atoi(parts[1])
+        e, _ := strconv.Atoi(parts[2])
 
+        // THE FIX: Nest the episode inside a show object
         payload = map[string]interface{}{
-            "episodes": []map[string]interface{}{
+            "shows": []map[string]interface{}{
                 {
-                    "ids": map[string]string{"imdb": showID}, // Trakt can find it via Show ID + S/E
-                    "season": season,
-                    "number": episode,
+                    "ids": map[string]string{"imdb": showIMDB},
+                    "seasons": []map[string]interface{}{
+                        {
+                            "number": s,
+                            "episodes": []map[string]interface{}{
+                                {"number": e},
+                            },
+                        },
+                    },
                 },
             },
         }
     } else {
-        // Handle simple Movie ID
+        // Movies stay the same
         payload = map[string]interface{}{
-            itemType + "s": []map[string]interface{}{
+            "movies": []map[string]interface{}{
                 {"ids": map[string]string{"imdb": id}},
             },
         }
     }
 
     body, _ := json.Marshal(payload)
-    resp, err := traktRequest("POST", "sync/history", &config, body)
-    if err == nil {
-        fmt.Printf("TRAKT_DEBUG: Sent %s | Status: %d\n", id, resp.StatusCode)
-    }
+
+		resp, err := traktRequest("POST", "sync/history", &config, body)
+		if err == nil {
+    		// READ THE BODY TO SEE WHAT WAS ACTUALLY ADDED
+    		var result map[string]interface{}
+    		json.NewDecoder(resp.Body).Decode(&result)
+    		
+    		added := result["added"].(map[string]interface{})
+    		fmt.Printf("TRAKT CONFIRMATION: Added %v episodes, %v movies\n", added["episodes"], added["movies"])
+    		
+    		if fmt.Sprintf("%v", added["episodes"]) == "0" && fmt.Sprintf("%v", added["movies"]) == "0" {
+        		fmt.Println("WARNING: Trakt accepted the request but ADDED ZERO items. Check your IDs.")
+    		}
+		}
 
   case "collection":
     // args: [2] = movies or shows
