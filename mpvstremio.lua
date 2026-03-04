@@ -39,7 +39,6 @@ mp.register_script_message("stremio-trakt-history", function()
 end)
 
 -- Playback logic with Scrobble Tracking
--- Playback logic with Scrobble Tracking
 local function play(stype, id)
     current_id = id
     current_type = stype
@@ -183,13 +182,10 @@ end)
 
 -- SYNC ON QUIT: Reports progress when closing
 mp.register_event("shutdown", function()
-    -- Only sync if we haven't scrobbled yet and have a file open
     if not scrobbled and current_id and current_type then
         local pos = mp.get_property_number("percent-pos")
-        -- Only sync if we've watched at least 1% but less than 85%
-        if pos and pos > 1 and pos < 85 then
-            -- We use 'command_native' (sync) instead of 'async' here 
-            -- because the script is about to die and async might get cut off
+        -- Changed to 5% to 85% to keep your Trakt history clean
+        if pos and pos > 5 and pos < 85 then
             mp.command_native({
                 name = "subprocess",
                 playback_only = false,
