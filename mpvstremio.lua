@@ -246,6 +246,13 @@ mp.register_script_message("stremio-manual-next", function()
     end)
 end)
 
+-- CLEARS VARS: Forgets previous episode so it doesn't show for a movie or blank screen
+mp.register_event("end-file", function()
+    current_id = nil
+    current_type = nil
+    up_next_triggered = false
+end)
+
 -- SYNC ON QUIT: Reports progress when closing
 mp.register_event("shutdown", function()
     if not scrobbled and current_id and current_type then
