@@ -1,12 +1,18 @@
 local mp = require 'mp'
 local utils = require 'mp.utils'
 
+-- 1. GLOBAL VARIABLES (At the top so all functions can see them)
 local BRIDGE_PATH = mp.command_native({"expand-path", "~~/stremio-bridge"})
 local last_query = ""
 local current_id = nil
 local current_type = nil
 local scrobbled = false
+local up_next_triggered = false
+local last_active_id = nil
+local last_active_type = nil
+local last_pos = 0
 
+-- 2. UTILITY: Display Results in uosc
 local function display_list_results(res, title_text)
     local items = {}
     if res and res.status == 0 and res.stdout then
@@ -22,7 +28,7 @@ local function display_list_results(res, title_text)
     mp.commandv("script-message-to", "uosc", "open-menu", utils.format_json({ type = "stremio_list_v3", title = title_text, items = items, keep_open = true }))
 end
 
--- Trakt Handlers
+-- 3. TRAKT HANDLERS
 mp.register_script_message("stremio-trakt-trending", function(stype)
     mp.osd_message("Fetching Trending " .. stype .. "...", 2)
     mp.command_native_async({ name = "subprocess", capture_stdout = true, playback_only = false, args = {BRIDGE_PATH, "trending", stype} }, function(s, res) display_list_results(res, "Trending " .. stype:upper()) end)
@@ -38,16 +44,22 @@ mp.register_script_message("stremio-trakt-history", function()
     mp.command_native_async({ name = "subprocess", capture_stdout = true, playback_only = false, args = {BRIDGE_PATH, "history"} }, function(s, res) display_list_results(res, "Recently Watched") end)
 end)
 
--- Playback logic with Scrobble Tracking
+mp.register_script_message("stremio-trakt-collection", function(stype)
+    mp.osd_message("Opening Library: " .. stype:upper() .. "...", 2)
+    mp.command_native_async({ name = "subprocess", capture_stdout = true, playback_only = false, args = {BRIDGE_PATH, "collection", stype} }, function(s, res) display_list_results(res, "Trakt Library: " .. stype:upper()) end)
+end)
+
+-- 4. PLAYBACK LOGIC
 local function play(stype, id)
     current_id = id
     current_type = stype
+    last_active_id = id
+    last_active_type = stype
     scrobbled = false
+    up_next_triggered = false
     
-    -- FORCE MPV to ignore its local memory for this file
     mp.set_property_bool("save-position-on-quit", false)
     mp.set_property("watch-later-directory", "")
-    
     mp.osd_message("Fetching Stream...", 5)
     
     mp.command_native_async({ name = "subprocess", capture_stdout = true, playback_only = false, args = {BRIDGE_PATH, "stream", stype, id} }, function(s, res)
@@ -60,14 +72,11 @@ local function play(stype, id)
         
         if url ~= "" then
             mp.commandv("loadfile", url, "replace")
-            
-            -- Wait for file to load, then check Trakt progress
             mp.add_timeout(1, function()
                 mp.command_native_async({ name = "subprocess", capture_stdout = true, args = {BRIDGE_PATH, "get-progress", stype, id} }, function(s2, res2)
                     if res2 and res2.stdout ~= "" then
                         local progress = tonumber(res2.stdout)
                         if progress and progress > 1 and progress < 90 then
-                            -- Create the uosc menu
                             local resume_menu = {
                                 type = "stremio_resume",
                                 title = "Resume from " .. math.floor(progress) .. "%?",
@@ -76,7 +85,6 @@ local function play(stype, id)
                                     { title = "No, Start Over", value = "ignore" }
                                 }
                             }
-                            -- Ensure the JSON is formatted correctly for uosc
                             mp.commandv("script-message-to", "uosc", "open-menu", utils.format_json(resume_menu))
                         end
                     end
@@ -86,67 +94,46 @@ local function play(stype, id)
     end)
 end
 
--- Listener for the Resume Menu selection
+-- Resume helper
 mp.register_script_message("stremio-do-resume", function(percent_str)
     local p = tonumber(percent_str)
     if not p then return end
-
-    -- We use a small delay to let the stream initialize
     mp.add_timeout(0.5, function()
         local duration = mp.get_property_number("duration")
         if duration and duration > 0 then
-            local seek_time = (p / 100) * duration
-            mp.commandv("seek", seek_time, "absolute", "exact")
+            mp.commandv("seek", (p / 100) * duration, "absolute", "exact")
         else
-            -- Fallback if duration isn't available yet
             mp.set_property_number("percent-pos", p)
         end
-        mp.osd_message("Resumed to " .. math.floor(p) .. "%", 3)
     end)
 end)
 
--- SCROBBLE & UP-NEXT OBSERVER: Checks every 10 seconds for better responsiveness
+-- 5. OBSERVERS (Position Tracking)
+mp.observe_property("percent-pos", "number", function(_, val)
+    if val and val > 0 then last_pos = val end
+end)
+
+-- Periodic scrobble check
 mp.add_periodic_timer(10, function()
     if not current_id or not current_type then return end
-    
     local pos = mp.get_property_number("percent-pos", 0)
 
-    -- 1. SCROBBLE LOGIC (85%)
     if not scrobbled and pos > 85 then
-        mp.command_native_async({
-            name = "subprocess", playback_only = false,
-            args = {BRIDGE_PATH, "scrobble", current_type, current_id}
-        }, function()
+        mp.command_native_async({ name = "subprocess", playback_only = false, args = {BRIDGE_PATH, "scrobble", current_type, current_id} }, function()
             scrobbled = true
             mp.osd_message("Trakt: Watch History Synced", 3)
         end)
     end
 
-    -- 2. AUTO-PLAY LOGIC (95%)
-    -- Only for series, and only if we haven't triggered it for this file yet
     if current_type == "episode" and pos > 95 and not up_next_triggered then
         up_next_triggered = true
-        
-        mp.command_native_async({
-            name = "subprocess",
-            capture_stdout = true,
-            args = {BRIDGE_PATH, "next-episode", current_id}
-        }, function(s, res)
+        mp.command_native_async({ name = "subprocess", capture_stdout = true, args = {BRIDGE_PATH, "next-episode", current_id} }, function(s, res)
             if res and res.stdout ~= "" then
-                -- Expecting format: episode|tt123:S:E
                 local n_type, n_id = res.stdout:match("([^|]+)|(.+)")
-                
                 if n_id then
-                    -- Notify the user via uosc
                     mp.commandv("script-message-to", "uosc", "show-text", "Up Next: Loading in 10 seconds...", 10)
-                    
-                    -- Wait 10 seconds then jump to the next episode
                     mp.add_timeout(10, function()
-                        -- Double check we are still at the end of the video before jumping
-                        local current_pos = mp.get_property_number("percent-pos", 0)
-                        if current_pos > 90 then
-                            play(n_type, n_id)
-                        end
+                        if mp.get_property_number("percent-pos", 0) > 90 then play(n_type, n_id) end
                     end)
                 end
             end
@@ -154,18 +141,7 @@ mp.add_periodic_timer(10, function()
     end
 end)
 
-mp.register_script_message("stremio-trakt-collection", function(stype)
-    mp.osd_message("Opening Library: " .. stype:upper() .. "...", 2)
-    mp.command_native_async({
-        name = "subprocess",
-        capture_stdout = true,
-        playback_only = false,
-        args = {BRIDGE_PATH, "collection", stype}
-    }, function(s, res)
-        display_list_results(res, "Trakt Library: " .. stype:upper())
-    end)
-end)
-
+-- 6. SEARCH & MENU
 mp.register_script_message("stremio-search-type-callback", function(stype, ...)
     local query = table.concat({...}, " ")
     if query == "" then return end
@@ -208,61 +184,43 @@ mp.add_key_binding(nil, "stremio-menu", function()
         { title = "Trakt Show Watchlist", value = "script-message stremio-trakt-watchlist shows" }
     }
 
-    -- DYNAMIC: Add "Skip to Next Episode" if we are watching a series
     if current_type == "episode" and current_id then
         table.insert(items, 1, { title = "⏭ Skip to Next Episode", value = "script-message stremio-manual-next" })
         table.insert(items, 2, { title = "--------------------------------", value = "ignore" })
     end
 
-    local main_menu = {
-        type = "stremio_main_v4",
-        title = "Stremio",
-        items = items
-    }
-    
+    local main_menu = { type = "stremio_main_v4", title = "Stremio", items = items }
     pcall(function() mp.commandv("script-message-to", "uosc", "open-menu", utils.format_json(main_menu)) end)
 end)
 
 mp.register_script_message("stremio-manual-next", function()
     if not current_id or current_type ~= "episode" then return end
-    
     mp.osd_message("Finding next episode...", 2)
-    
-    mp.command_native_async({
-        name = "subprocess",
-        capture_stdout = true,
-        args = {BRIDGE_PATH, "next-episode", current_id}
-    }, function(s, res)
+    mp.command_native_async({ name = "subprocess", capture_stdout = true, args = {BRIDGE_PATH, "next-episode", current_id} }, function(s, res)
         if res and res.stdout ~= "" then
             local n_type, n_id = res.stdout:match("([^|]+)|(.+)")
             if n_id then
-                -- Close the menu and play immediately
                 mp.commandv("script-message-to", "uosc", "close-menu")
                 play(n_type, n_id)
-            else
-                mp.osd_message("No more episodes found.", 3)
             end
         end
     end)
 end)
 
--- CLEARS VARS: Forgets previous episode so it doesn't show for a movie or blank screen
+-- 7. EVENTS & CLEANUP (Syncing on Quit)
 mp.register_event("end-file", function()
-    current_id = nil
-    current_type = nil
+    -- Only clear up_next, keep IDs for the shutdown event
     up_next_triggered = false
 end)
 
--- SYNC ON QUIT: Reports progress when closing
 mp.register_event("shutdown", function()
-    if not scrobbled and current_id and current_type then
-        local pos = mp.get_property_number("percent-pos")
-        -- Changed to 5% to 85% to keep your Trakt history clean
-        if pos and pos > 5 and pos < 85 then
+    if not scrobbled and last_active_id and last_active_type then
+        if last_pos > 5 and last_pos < 90 then
+            -- SYNC TO TRAKT
             mp.command_native({
                 name = "subprocess",
                 playback_only = false,
-                args = {BRIDGE_PATH, "progress", current_type, current_id, tostring(pos)}
+                args = {BRIDGE_PATH, "progress", last_active_type, last_active_id, tostring(last_pos)}
             })
         end
     end
