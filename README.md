@@ -21,7 +21,7 @@ The project consists of two main components:
 
     The Bridge (main.go): A compiled CLI tool that communicates with Cinemeta and Torrentio APIs. It handles the data processing and stream fetching.
 
-    The UI (stremio-uosc.lua): A Lua script for MPV that handles the user input and renders the menus using the uosc framework.
+    The UI (mpvstremio.lua): A Lua script for MPV that handles the user input and renders the menus using the uosc framework.
 
 🚀 Installation
 1. Prerequisites
@@ -42,7 +42,7 @@ go build -o stremio-bridge main.go
 Place the stremio-bridge executable in your MPV scripts folder (usually ~~/scripts/ or alongside the lua script).
 3. Configuration
 
-Create a stremio.conf file in the same directory as the bridge:
+Run setup.sh or create a mpvstremio.conf file in the same directory as the bridge:
 Ini, TOML
 
 REAL_DEBRID_ENABLED=true
