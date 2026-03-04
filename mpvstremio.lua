@@ -67,6 +67,18 @@ mp.add_periodic_timer(60, function()
     end
 end)
 
+mp.register_script_message("stremio-trakt-collection", function(stype)
+    mp.osd_message("Opening Library: " .. stype:upper() .. "...", 2)
+    mp.command_native_async({
+        name = "subprocess",
+        capture_stdout = true,
+        playback_only = false,
+        args = {BRIDGE_PATH, "collection", stype}
+    }, function(s, res)
+        display_list_results(res, "Trakt Library: " .. stype:upper())
+    end)
+end)
+
 mp.register_script_message("stremio-search-type-callback", function(stype, ...)
     local query = table.concat({...}, " ")
     if query == "" then return end
@@ -104,6 +116,9 @@ mp.add_key_binding(nil, "stremio-menu", function()
             { title = "Search Movies", value = "script-message stremio-category-select movie" },
             { title = "Search Shows", value = "script-message stremio-category-select series" },
             { title = "Recently Watched", value = "script-message stremio-trakt-history" },
+            { title = "---", value = "ignore" },
+            { title = "My Movie Library", value = "script-message stremio-trakt-collection movies" },
+            { title = "My Show Library", value = "script-message stremio-trakt-collection shows" },
             { title = "---", value = "ignore" },
             { title = "Trending Movies", value = "script-message stremio-trakt-trending movies" },
             { title = "Trending Shows", value = "script-message stremio-trakt-trending shows" },

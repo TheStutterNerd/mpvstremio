@@ -145,6 +145,21 @@ func main() {
         fmt.Printf("TRAKT_DEBUG: Sent %s | Status: %d\n", id, resp.StatusCode)
     }
 
+  case "collection":
+    // args: [2] = movies or shows
+    endpoint := "sync/collection/" + os.Args[2]
+    resp, _ := traktRequest("GET", endpoint, &config, nil)
+    if resp == nil { return }
+    var items []TraktItem
+    json.NewDecoder(resp.Body).Decode(&items)
+    for _, item := range items {
+        if item.Movie != nil { 
+            fmt.Printf("movie|%s|%s (%d)\n", item.Movie.IDs.IMDB, item.Movie.Title, item.Movie.Year)
+        } else if item.Show != nil { 
+            fmt.Printf("series|%s|%s\n", item.Show.IDs.IMDB, item.Show.Title) 
+        }
+    }
+
 	case "history":
 		resp, _ := traktRequest("GET", "sync/history?limit=30", &config, nil)
 		if resp == nil { return }
